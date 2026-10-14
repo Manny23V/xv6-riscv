@@ -2,6 +2,7 @@
 
 struct stat;
 struct rusage;
+struct pstat;
 
 // system calls
 int fork(void);
@@ -27,6 +28,9 @@ int pause(int);
 int uptime(void);
 int sync(void);
 int wait2(int*, struct rusage*);
+int getprocs(struct pstat*); // system call that fills pstat array and returns number of populated processes (task 1)
+int getpriority(void);
+int setpriority(int);
 
 // ulib.c
 int stat(const char *, struct stat *);

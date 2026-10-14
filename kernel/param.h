@@ -12,3 +12,13 @@
 #define FSSIZE      2000              // size of file system in blocks
 #define MAXPATH     128               // maximum file path name
 #define USERSTACK   1                 // user stack pages
+
+// scheduling policies
+#define SCHED_RR        0 // round-robin policy
+#define SCHED_PRIO      1 // priority-based policy
+#define SCHED_AGING     2 // priority-based policy with aging
+
+#ifndef SCHED_POLICY
+#define SCHED_POLICY SCHED_AGING
+#endif
+
