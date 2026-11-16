@@ -76,7 +76,11 @@ struct trapframe {
   /* 280 */ uint64 t6;
 };
 
+// guard check added for no duplicate errors
+#ifndef _PROCSTATE_
+#define _PROCSTATE_
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
+#endif
 
 // Per-process state
 struct proc {
@@ -103,4 +107,6 @@ struct proc {
   char name[16];               // Process name (debugging)
 
   int cputime;
+  int priority;
+  int readytime; // tick for timestamp when entered RUNNABLE state (Task 3)
 };

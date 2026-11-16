@@ -21,6 +21,8 @@ static void freeproc(struct proc *p);
 
 extern char trampoline[]; // trampoline.S
 
+extern uint ticks;
+
 // helps ensure that wakeups of wait()ing
 // parents are not lost. helps obey the
 // memory model when using p->parent.
@@ -126,6 +128,8 @@ found:
   p->pid = allocpid();
   p->state = USED;
   p->cputime = 0; //Initialize to 0 when the process is created
+  p->priority = 0; // initilzes default priority (Task 2)
+  p->readytime = 0; // initialzes readytime field (Task 3)
 
   // Allocate a trapframe page.
   if ((p->trapframe = (struct trapframe *)kalloc()) == 0) {
@@ -228,7 +232,7 @@ userinit(void)
   p->cwd = namei("/");
 
   p->state = RUNNABLE;
-
+  p->readytime = ticks; // records timestamp, as it transition to RUNNABLE (task 3)
   release(&p->lock);
 }
 
@@ -291,6 +295,9 @@ kfork(void)
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
+  // child inherits priority from parent
+  np->priority = p->priority;
+
   pid = np->pid;
 
   release(&np->lock);
@@ -301,6 +308,7 @@ kfork(void)
 
   acquire(&np->lock);
   np->state = RUNNABLE;
+  np->readytime = ticks; // as transition child to RUNNABLE it records timestamp (task 3)
   release(&np->lock);
 
   return pid;
@@ -508,6 +516,76 @@ scheduler(void)
     intr_off();
 
     int found = 0;
+
+#if SCHED_POLICY == SCHED_AGING
+    struct proc *highestPrio = 0; 
+    int maxPrio = -1;
+
+    // looks to find the RUNNABLE process with the highest priority
+    for (p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if (p->state == RUNNABLE) {
+        // calculate the priority using age
+        int age = ticks - p->readytime;
+        int agePrio = p->priority + (age / 10);
+        if (agePrio > 49)
+          agePrio = 49;
+
+        if (highestPrio == 0 || agePrio > maxPrio) {
+          // release previous lock if holding one
+          if (highestPrio != 0)
+            release(&highestPrio->lock);
+          highestPrio = p;
+          maxPrio = agePrio;
+          continue; //kee holding the lock
+        }
+      }
+      release(&p->lock);
+    }
+
+    // if a RUNNABLE process is found, it is switch to it and run
+    if (highestPrio != 0) {
+      highestPrio->state = RUNNING;
+      c->proc = highestPrio;
+      swtch(&c->context, &highestPrio->context);
+      mycpu()->intena = 0;
+      c->proc = 0;
+      found = 1;
+      release(&highestPrio->lock);
+    }
+
+#elif SCHED_POLICY == SCHED_PRIO
+    struct proc *highestPrio = 0;
+    int maxPrio = -1;
+
+    // looks to find the RUNNABLE process with the highest priority
+    for (p = proc; p < &proc[NPROC]; p++) {
+      acquire(&p->lock);
+      if (p->state == RUNNABLE) {
+        // if no process is picked, or this process beats the current best
+        if (highestPrio == 0 || p->priority > maxPrio) {
+          // release previous lock if holding one
+          if (highestPrio != 0)
+            release(&highestPrio->lock);
+          highestPrio = p;
+          maxPrio = p->priority;
+          continue; // keep holding the lock
+        }
+      }
+      release(&p->lock);
+    }
+    // if a RUNNABLE process is found, it is switch to it and run
+    if (highestPrio != 0) {
+      highestPrio->state = RUNNING;
+      c->proc = highestPrio;
+      swtch(&c->context, &highestPrio->context);
+      mycpu()->intena = 0;
+      c->proc = 0;
+      found = 1;
+      release(&highestPrio->lock);
+    }
+
+#else
     for (p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
       if (p->state == RUNNABLE) {
@@ -528,6 +606,7 @@ scheduler(void)
       }
       release(&p->lock);
     }
+#endif
     if (found == 0) {
       // nothing to run; stop running on this core until an interrupt.
       asm volatile("wfi");
@@ -569,6 +648,7 @@ yield(void)
   struct proc *p = myproc();
   acquire(&p->lock);
   p->state = RUNNABLE;
+  p->readytime = ticks; // reset ready timestamp (task 3)
   sched();
   release(&p->lock);
 }
@@ -654,6 +734,7 @@ wakeup(void *chan)
       // go to sleep, also set it back to RUNNING.
       if (p->state == SLEEPING) {
         p->state = RUNNABLE;
+        p->readytime = ticks; //records timestamp as it transition from SLEEPING to RUNNABLE (task 3)
       }
     }
     release(&p->lock);
@@ -678,6 +759,7 @@ kkill(int pid)
       if (p->state == SLEEPING) {
         // Wake process from sleep().
         p->state = RUNNABLE;
+        p->readytime = ticks; // task 3
       }
       release(&p->lock);
       return 0;
@@ -766,4 +848,73 @@ procdump(void)
     printk("%d %s %s", p->pid, state, p->name);
     printk("\n");
   }
+}
+
+// getprocs system call (task 1)
+int
+getprocs(uint64 dstAdr) {
+  struct proc *p;
+  struct pstat ps;
+  int count = 0;
+  struct proc *cur = myproc();
+
+  // iterates all available process slots in kernel table
+  for (p = proc; p < &proc[NPROC]; p++) {
+    acquire(&p->lock);
+
+    // goes through only slots that are ACTIVE or in ZOMBIE process
+    if (p->state != UNUSED) {
+      ps.pid = p->pid;
+      ps.state = p->state;
+      ps.size = p->sz;
+
+      // checks if parent exists, if not extarcts parent PID
+      if (p->parent) {
+        ps.ppid = p->parent->pid;
+      }else{
+        ps.ppid = 0;
+      }
+
+      // safely copy the process executable name into our temp struct
+      safestrcpy(ps.name, p->name, sizeof(ps.name));
+
+      ps.priority = p->priority; // copies priority field (Task 2)
+      ps.readytime = p->readytime; // copies the process readytime (Task 3)
+
+      // calculates the vertual address offset for current array slot
+      uint64 dest = dstAdr + count * sizeof(struct pstat);
+      // copies the kernel struct into user virtual memory
+      if (copyout(cur->pagetable, cur->sz, dest, (char *)&ps, sizeof(ps)) < 0) {
+        release(&p->lock);
+        return -1; //returns -1 if user address is invalid
+      }
+      count++; // increases count of active processes found
+    }
+    release(&p->lock);
+  }
+  // retuns the total number of active processes
+  return count;
+}
+
+// gets the current process priority (Task 2)
+int
+getpriority(void) {
+  struct proc *p = myproc();
+  acquire(&p->lock);
+  int prio = p->priority;
+  release(&p->lock);
+  return prio;
+}
+
+// sets the current process priority, between 0-49 (Task 2)
+int
+setpriority(int priority) {
+  if (priority < 0 || priority > 49)
+    return -1;
+
+  struct proc *p = myproc();
+  acquire(&p->lock);
+  p->priority = priority;
+  release(&p->lock);
+  return 0;
 }

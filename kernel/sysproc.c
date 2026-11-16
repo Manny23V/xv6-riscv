@@ -121,3 +121,27 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+// getprocs() system call (task 1)
+uint64
+sys_getprocs(void) {
+  uint64 dstAdr;
+  // retrives the 0 argument, the pointer to struct pstat passed by the user
+  argaddr(0, &dstAdr);
+  // returns destination address to kernel logic in proc.c
+  return getprocs(dstAdr);
+}
+
+// gets priority of the calling process (task 2)
+uint64
+sys_getpriority(void) {
+  return getpriority();
+}
+
+// sets priority of the calling process (task 2)
+uint64
+sys_setpriority(void) {
+  int prio;
+  argint(0, &prio);
+  return setpriority(prio);
+}
